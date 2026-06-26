@@ -29,7 +29,7 @@ export interface TrustCalculation {
 
 export interface PunishmentWeights {
 	active: { permanent: number; temporary: number }
-	past: { permanent: number; temporary: number }
+	past: { temporary: number }
 }
 
 export interface TrustConfig {
@@ -37,7 +37,10 @@ export interface TrustConfig {
 	ban: PunishmentWeights
 	mute: PunishmentWeights
 	report: { perReport: number; maxPenalty: number }
-	csrep: { weight: number }
+	csrep: {
+		ratingWeight: number
+		bans: { vac: number; game: number; overwatch: number; faceit: number; economy: number }
+	}
 	levels: { trusted: number; neutral: number; caution: number }
 }
 

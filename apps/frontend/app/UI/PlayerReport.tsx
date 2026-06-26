@@ -155,11 +155,11 @@ const CommunityCard = ({ c }: { c: CommunityPunishments }) => {
 				<p className="text-sm text-gray-500">No bans or mutes on record.</p>
 			) : (
 				<div className="flex flex-col">
-					{c.bans.map((b, i) => (
-						<PunishmentRow key={`b${i}`} kind="ban" p={b} />
+					{c.bans.map(b => (
+						<PunishmentRow key={`ban-${b.created}-${b.status}-${b.reason}`} kind="ban" p={b} />
 					))}
-					{c.mutes.map((m, i) => (
-						<PunishmentRow key={`m${i}`} kind="mute" p={m} />
+					{c.mutes.map(m => (
+						<PunishmentRow key={`mute-${m.type}-${m.created}-${m.status}-${m.reason}`} kind="mute" p={m} />
 					))}
 				</div>
 			)}
@@ -175,7 +175,7 @@ const STATUS_COLOR: Record<string, string> = {
 }
 
 const PunishmentRow = ({ kind, p }: { kind: 'ban' | 'mute'; p: FederationBan | FederationMute }) => {
-	const permanent = p.duration <= 0 || p.ends === null
+	const permanent = p.duration <= 0
 	const muteType = kind === 'mute' ? (p as FederationMute).type : null
 
 	return (

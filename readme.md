@@ -117,19 +117,24 @@ That's the whole opt-in: any URL you add here is queried at
 
 ### 3. Tune the trust model (optional)
 
-Edit **`apps/backend/config/trust.json`**. Penalties are split by **status**
-(`active` / `past`) and **duration** (`permanent` / `temporary`):
+Edit **`apps/backend/config/trust.json`**. Punishments are scored by **status**
+(`active` / `past`) and **duration** (`permanent` = `duration 0`). csrep contributes
+both its `trust_rating` (blended at `ratingWeight`) and flat penalties for its hard
+ban flags.
 
 ```json
 {
   "baseScore": 100,
-  "ban":  { "active": { "permanent": 75, "temporary": 30 }, "past": { "permanent": 25, "temporary": 8 } },
-  "mute": { "active": { "permanent": 20, "temporary": 6 },  "past": { "permanent": 6,  "temporary": 1 } },
+  "ban":  { "active": { "permanent": 75, "temporary": 30 }, "past": { "temporary": 8 } },
+  "mute": { "active": { "permanent": 20, "temporary": 6 },  "past": { "temporary": 1 } },
   "report": { "perReport": 2, "maxPenalty": 20 },
-  "csrep":  { "weight": 0.3 },
+  "csrep":  { "ratingWeight": 0.3, "bans": { "vac": 40, "game": 35, "overwatch": 30, "faceit": 20, "economy": 5 } },
   "levels": { "trusted": 80, "neutral": 55, "caution": 30 }
 }
 ```
+
+> A **reversed permanent** punishment (`duration 0` but no longer `ACTIVE`, e.g.
+> unbanned) is **ignored** — only *active* permanent bans count as critical.
 
 Edits apply on restart, or instantly on any `?refresh=true` lookup. A partial file
 merges onto the defaults; an invalid file falls back to the defaults.

@@ -2,32 +2,47 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 export interface PunishmentWeights {
+	/** Active punishments, by duration (permanent = duration 0, the critical signal). */
 	active: { permanent: number; temporary: number }
-	past: { permanent: number; temporary: number }
+	/**
+	 * Lifted/expired punishments — only temporary ones count. A *reversed permanent*
+	 * punishment (duration 0 but no longer ACTIVE, e.g. unbanned) is ignored entirely.
+	 */
+	past: { temporary: number }
+}
+
+export interface CSREPWeights {
+	/** How much csrep's own trust_rating (0–100) is blended into the final score (0–1). */
+	ratingWeight: number
+	/** Flat penalties for csrep's hard ban flags (global signals from csrep.gg). */
+	bans: { vac: number; game: number; overwatch: number; faceit: number; economy: number }
 }
 
 export interface TrustConfig {
 	/** Score everyone starts from, before penalties. */
 	baseScore: number
-	/** Penalty per ban, by status (active/past) and duration (permanent = duration 0). */
+	/** Penalty per ban. */
 	ban: PunishmentWeights
-	/** Penalty per mute, same axes as bans. */
+	/** Penalty per mute. */
 	mute: PunishmentWeights
 	/** Reports penalty: `perReport` each, capped at `maxPenalty`. */
 	report: { perReport: number; maxPenalty: number }
-	/** How much csrep's own trust_rating (0–100) is blended into the final score (0–1). */
-	csrep: { weight: number }
+	/** csrep signals — its trust rating plus hard ban flags. */
+	csrep: CSREPWeights
 	/** Inclusive lower bounds for each trust level; below `caution` is "risky". */
 	levels: { trusted: number; neutral: number; caution: number }
 }
 
 export const DEFAULT_TRUST_CONFIG: TrustConfig = {
 	baseScore: 100,
-	// Permanent (duration 0) punishments are treated as critical — a cheater-grade signal.
-	ban: { active: { permanent: 75, temporary: 30 }, past: { permanent: 25, temporary: 8 } },
-	mute: { active: { permanent: 20, temporary: 6 }, past: { permanent: 6, temporary: 1 } },
+	// Permanent (duration 0) ACTIVE punishments are critical — a cheater-grade signal.
+	ban: { active: { permanent: 75, temporary: 30 }, past: { temporary: 8 } },
+	mute: { active: { permanent: 20, temporary: 6 }, past: { temporary: 1 } },
 	report: { perReport: 2, maxPenalty: 20 },
-	csrep: { weight: 0.3 },
+	csrep: {
+		ratingWeight: 0.3,
+		bans: { vac: 40, game: 35, overwatch: 30, faceit: 20, economy: 5 },
+	},
 	levels: { trusted: 80, neutral: 55, caution: 30 },
 }
 
@@ -74,7 +89,6 @@ const mergePunishment = (
 		temporary: num(o?.active?.temporary, base.active.temporary),
 	},
 	past: {
-		permanent: num(o?.past?.permanent, base.past.permanent),
 		temporary: num(o?.past?.temporary, base.past.temporary),
 	},
 })
@@ -89,7 +103,16 @@ const mergeConfig = (base: TrustConfig, o: DeepPartial<TrustConfig> | undefined)
 			perReport: num(o.report?.perReport, base.report.perReport),
 			maxPenalty: num(o.report?.maxPenalty, base.report.maxPenalty),
 		},
-		csrep: { weight: num(o.csrep?.weight, base.csrep.weight) },
+		csrep: {
+			ratingWeight: num(o.csrep?.ratingWeight, base.csrep.ratingWeight),
+			bans: {
+				vac: num(o.csrep?.bans?.vac, base.csrep.bans.vac),
+				game: num(o.csrep?.bans?.game, base.csrep.bans.game),
+				overwatch: num(o.csrep?.bans?.overwatch, base.csrep.bans.overwatch),
+				faceit: num(o.csrep?.bans?.faceit, base.csrep.bans.faceit),
+				economy: num(o.csrep?.bans?.economy, base.csrep.bans.economy),
+			},
+		},
 		levels: {
 			trusted: num(o.levels?.trusted, base.levels.trusted),
 			neutral: num(o.levels?.neutral, base.levels.neutral),

@@ -4,9 +4,9 @@ import type { CommunityPunishments } from './types'
 
 export type TrustLevel = 'trusted' | 'neutral' | 'caution' | 'risky'
 
-/** One line of the score math: a category of punishment and what it deducted. */
+/** One line of the score math: a category of signal and what it deducted. */
 export interface TrustFactor {
-	/** Stable key, e.g. "ban.active.permanent" or "reports". */
+	/** Stable key, e.g. "ban.active.permanent", "csrep.vac" or "reports". */
 	key: string
 	label: string
 	count: number
@@ -47,9 +47,23 @@ export interface TrustScore {
 	provisional: true
 }
 
-/** Duration 0 (or no end date) means an infinite/permanent punishment — a cheater-grade signal. */
-const isPermanent = (p: { duration: number; ends: string | null }): boolean =>
-	p.duration <= 0 || p.ends === null
+/** Duration 0 means an infinite/permanent punishment. */
+const isPermanent = (p: { duration: number }): boolean => p.duration <= 0
+
+type PunishmentTally = { active: { permanent: number; temporary: number }; past: { temporary: number } }
+
+/**
+ * Bucket a punishment by status + duration.
+ * A reversed/expired *permanent* punishment (duration 0 but not ACTIVE) is ignored
+ * entirely — an unbanned permanent ban no longer counts against the player.
+ */
+function classify(p: { duration: number; status: string }, into: PunishmentTally): void {
+	const active = p.status === 'ACTIVE'
+	const permanent = isPermanent(p)
+	if (permanent && !active) return // reversed permanent punishment → ignore
+	if (active) into.active[permanent ? 'permanent' : 'temporary']++
+	else into.past.temporary++
+}
 
 /**
  * Compute a player's trust score from federated punishments + csrep.
@@ -64,21 +78,15 @@ export function computeTrustScore(
 	config: TrustConfig = getTrustConfig(),
 ): TrustScore {
 	const tally = {
-		ban: { active: { permanent: 0, temporary: 0 }, past: { permanent: 0, temporary: 0 } },
-		mute: { active: { permanent: 0, temporary: 0 }, past: { permanent: 0, temporary: 0 } },
+		ban: { active: { permanent: 0, temporary: 0 }, past: { temporary: 0 } } as PunishmentTally,
+		mute: { active: { permanent: 0, temporary: 0 }, past: { temporary: 0 } } as PunishmentTally,
 		reports: 0,
 	}
 
 	for (const c of communities) {
 		tally.reports += c.reports
-		for (const b of c.bans) {
-			const status = b.status === 'ACTIVE' ? 'active' : 'past'
-			tally.ban[status][isPermanent(b) ? 'permanent' : 'temporary']++
-		}
-		for (const m of c.mutes) {
-			const status = m.status === 'ACTIVE' ? 'active' : 'past'
-			tally.mute[status][isPermanent(m) ? 'permanent' : 'temporary']++
-		}
+		for (const b of c.bans) classify(b, tally.ban)
+		for (const m of c.mutes) classify(m, tally.mute)
 	}
 
 	const factors: TrustFactor[] = []
@@ -86,14 +94,24 @@ export function computeTrustScore(
 		if (count > 0) factors.push({ key, label, count, weight, penalty: count * weight })
 	}
 
+	// Community punishments.
 	add('ban.active.permanent', 'Active permanent bans', tally.ban.active.permanent, config.ban.active.permanent)
 	add('ban.active.temporary', 'Active temporary bans', tally.ban.active.temporary, config.ban.active.temporary)
-	add('ban.past.permanent', 'Past permanent bans', tally.ban.past.permanent, config.ban.past.permanent)
 	add('ban.past.temporary', 'Past temporary bans', tally.ban.past.temporary, config.ban.past.temporary)
 	add('mute.active.permanent', 'Active permanent mutes', tally.mute.active.permanent, config.mute.active.permanent)
 	add('mute.active.temporary', 'Active temporary mutes', tally.mute.active.temporary, config.mute.active.temporary)
-	add('mute.past.permanent', 'Past permanent mutes', tally.mute.past.permanent, config.mute.past.permanent)
 	add('mute.past.temporary', 'Past temporary mutes', tally.mute.past.temporary, config.mute.past.temporary)
+
+	// csrep hard ban flags — global cheater signals from csrep.gg.
+	const cb = (csrep?.bans ?? {}) as Record<string, unknown>
+	const addFlag = (key: string, label: string, flagged: unknown, weight: number) => {
+		if (flagged === true) factors.push({ key, label, count: 1, weight, penalty: weight })
+	}
+	addFlag('csrep.vac', 'VAC ban (csrep)', cb.vac, config.csrep.bans.vac)
+	addFlag('csrep.game', 'Game ban (csrep)', cb.game, config.csrep.bans.game)
+	addFlag('csrep.overwatch', 'Overwatch ban (csrep)', cb.overwatch, config.csrep.bans.overwatch)
+	addFlag('csrep.faceit', 'FACEIT ban (csrep)', cb.faceit, config.csrep.bans.faceit)
+	addFlag('csrep.economy', 'Economy ban (csrep)', cb.economy, config.csrep.bans.economy)
 
 	// Reports: linear per report, capped so a brigade can't zero someone out.
 	if (tally.reports > 0) {
@@ -116,7 +134,7 @@ export function computeTrustScore(
 	const rating = typeof csrep?.trust_rating === 'number' ? csrep.trust_rating : null
 	const applied = rating !== null
 	const scoreBeforeBlend = score
-	if (applied) score = score * (1 - config.csrep.weight) + rating * config.csrep.weight
+	if (applied) score = score * (1 - config.csrep.ratingWeight) + rating * config.csrep.ratingWeight
 	const scoreAfterBlend = score
 
 	const finalScore = Math.max(0, Math.min(100, Math.round(score)))
@@ -130,7 +148,7 @@ export function computeTrustScore(
 			communitiesQueried: communities.length,
 			factors,
 			penaltyTotal,
-			csrep: { rating, weight: config.csrep.weight, applied, scoreBeforeBlend, scoreAfterBlend },
+			csrep: { rating, weight: config.csrep.ratingWeight, applied, scoreBeforeBlend, scoreAfterBlend },
 			finalScore,
 		},
 		provisional: true,
