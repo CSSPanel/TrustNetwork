@@ -1,0 +1,14 @@
+{
+	"baseScore": 100,
+	"ban": {
+		"active": { "permanent": 75, "temporary": 30 },
+		"past": { "permanent": 25, "temporary": 8 }
+	},
+	"mute": {
+		"active": { "permanent": 20, "temporary": 6 },
+		"past": { "permanent": 6, "temporary": 1 }
+	},
+	"report": { "perReport": 2, "maxPenalty": 20 },
+	"csrep": { "weight": 0.3 },
+	"levels": { "trusted": 80, "neutral": 55, "caution": 30 }
+}

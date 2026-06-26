@@ -1,0 +1,145 @@
+import type { CSREPPlayerEntity } from '../csrep'
+import { getTrustConfig, type TrustConfig } from './trustConfig'
+import type { CommunityPunishments } from './types'
+
+export type TrustLevel = 'trusted' | 'neutral' | 'caution' | 'risky'
+
+/** One line of the score math: a category of punishment and what it deducted. */
+export interface TrustFactor {
+	/** Stable key, e.g. "ban.active.permanent" or "reports". */
+	key: string
+	label: string
+	count: number
+	/** Per-item weight from the config. */
+	weight: number
+	/** Actual points deducted (count * weight, except reports which are capped). */
+	penalty: number
+	/** Present on the reports factor when the cap was hit. */
+	capped?: boolean
+}
+
+/** The full, reconstructable derivation of a player's score. */
+export interface TrustCalculation {
+	base: number
+	communitiesQueried: number
+	/** Every penalty that applied (count > 0), in deduction order. */
+	factors: TrustFactor[]
+	penaltyTotal: number
+	csrep: {
+		rating: number | null
+		weight: number
+		applied: boolean
+		scoreBeforeBlend: number
+		scoreAfterBlend: number
+	}
+	finalScore: number
+}
+
+export interface TrustScore {
+	/** 0–100, higher is more trustworthy. PROVISIONAL — see `provisional`. */
+	score: number
+	level: TrustLevel
+	/** The weights used for this calculation (shared so the result is reproducible). */
+	config: TrustConfig
+	/** Step-by-step derivation of `score`. */
+	calculation: TrustCalculation
+	/** Flags this as the placeholder heuristic, not the final model. */
+	provisional: true
+}
+
+/** Duration 0 (or no end date) means an infinite/permanent punishment — a cheater-grade signal. */
+const isPermanent = (p: { duration: number; ends: string | null }): boolean =>
+	p.duration <= 0 || p.ends === null
+
+/**
+ * Compute a player's trust score from federated punishments + csrep.
+ *
+ * Weights come from config/trust.json (see trustConfig.ts) so the model is
+ * tunable without code changes. The returned `config` + `calculation` make every
+ * deduction transparent. Still PROVISIONAL — the shape is final, the weights aren't.
+ */
+export function computeTrustScore(
+	communities: CommunityPunishments[],
+	csrep: CSREPPlayerEntity | null,
+	config: TrustConfig = getTrustConfig(),
+): TrustScore {
+	const tally = {
+		ban: { active: { permanent: 0, temporary: 0 }, past: { permanent: 0, temporary: 0 } },
+		mute: { active: { permanent: 0, temporary: 0 }, past: { permanent: 0, temporary: 0 } },
+		reports: 0,
+	}
+
+	for (const c of communities) {
+		tally.reports += c.reports
+		for (const b of c.bans) {
+			const status = b.status === 'ACTIVE' ? 'active' : 'past'
+			tally.ban[status][isPermanent(b) ? 'permanent' : 'temporary']++
+		}
+		for (const m of c.mutes) {
+			const status = m.status === 'ACTIVE' ? 'active' : 'past'
+			tally.mute[status][isPermanent(m) ? 'permanent' : 'temporary']++
+		}
+	}
+
+	const factors: TrustFactor[] = []
+	const add = (key: string, label: string, count: number, weight: number) => {
+		if (count > 0) factors.push({ key, label, count, weight, penalty: count * weight })
+	}
+
+	add('ban.active.permanent', 'Active permanent bans', tally.ban.active.permanent, config.ban.active.permanent)
+	add('ban.active.temporary', 'Active temporary bans', tally.ban.active.temporary, config.ban.active.temporary)
+	add('ban.past.permanent', 'Past permanent bans', tally.ban.past.permanent, config.ban.past.permanent)
+	add('ban.past.temporary', 'Past temporary bans', tally.ban.past.temporary, config.ban.past.temporary)
+	add('mute.active.permanent', 'Active permanent mutes', tally.mute.active.permanent, config.mute.active.permanent)
+	add('mute.active.temporary', 'Active temporary mutes', tally.mute.active.temporary, config.mute.active.temporary)
+	add('mute.past.permanent', 'Past permanent mutes', tally.mute.past.permanent, config.mute.past.permanent)
+	add('mute.past.temporary', 'Past temporary mutes', tally.mute.past.temporary, config.mute.past.temporary)
+
+	// Reports: linear per report, capped so a brigade can't zero someone out.
+	if (tally.reports > 0) {
+		const raw = tally.reports * config.report.perReport
+		const penalty = Math.min(raw, config.report.maxPenalty)
+		factors.push({
+			key: 'reports',
+			label: 'Reports received',
+			count: tally.reports,
+			weight: config.report.perReport,
+			penalty,
+			capped: penalty < raw,
+		})
+	}
+
+	const penaltyTotal = factors.reduce((sum, f) => sum + f.penalty, 0)
+	let score = config.baseScore - penaltyTotal
+
+	// Blend csrep's own trust rating (0–100) when present.
+	const rating = typeof csrep?.trust_rating === 'number' ? csrep.trust_rating : null
+	const applied = rating !== null
+	const scoreBeforeBlend = score
+	if (applied) score = score * (1 - config.csrep.weight) + rating * config.csrep.weight
+	const scoreAfterBlend = score
+
+	const finalScore = Math.max(0, Math.min(100, Math.round(score)))
+
+	return {
+		score: finalScore,
+		level: toLevel(finalScore, config.levels),
+		config,
+		calculation: {
+			base: config.baseScore,
+			communitiesQueried: communities.length,
+			factors,
+			penaltyTotal,
+			csrep: { rating, weight: config.csrep.weight, applied, scoreBeforeBlend, scoreAfterBlend },
+			finalScore,
+		},
+		provisional: true,
+	}
+}
+
+function toLevel(score: number, levels: TrustConfig['levels']): TrustLevel {
+	if (score >= levels.trusted) return 'trusted'
+	if (score >= levels.neutral) return 'neutral'
+	if (score >= levels.caution) return 'caution'
+	return 'risky'
+}
