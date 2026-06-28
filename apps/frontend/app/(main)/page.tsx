@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Badge, Button, CopyButton, Loader, Table, TextInput, Tooltip } from '@mantine/core'
 import { ActionIcon } from '@mantine/core'
 import { BsBoxArrowUpRight, BsCheck2, BsClipboard, BsPeopleFill, BsSearch } from 'react-icons/bs'
@@ -34,6 +34,17 @@ const Home = () => {
 		const id = extractSteamId(raw)
 		if (id) setSubmitted(id)
 	}
+
+	// Auto-fill and look up a player when the URL carries a ?userId= param (e.g. /?userId=76561198869203626).
+	useEffect(() => {
+		const userId = new URLSearchParams(window.location.search).get('userId')
+		if (!userId) return
+		const id = extractSteamId(userId)
+		if (id) {
+			setInput(id)
+			setSubmitted(id)
+		}
+	}, [])
 
 	const onRefresh = async () => {
 		if (!submitted) return
